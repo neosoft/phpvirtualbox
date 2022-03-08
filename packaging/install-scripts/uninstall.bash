@@ -29,9 +29,10 @@ VBOX_VER=${VBOX_VER:='6.1'}
 VBOX_USER=${VBOX_USER:='vbox'}
 VBOX_GROUP=${VBOX_GROUP:='vboxusers'}
 VBOX_HOME=${VBOX_HOME:="/home/${VBOX_USER}"}
-VBOX_VM_DIR=${VBOX_VM_DIR:="${VBOX_HOME}/VBox/VMs"}
-VBOX_DRIVES_DIR=${VBOX_DRIVES_DIR:="${VBOX_HOME}/VBox/drives"}
-VBOX_IMPORT_DIR=${VBOX_IMPORT_DIR:="${VBOX_HOME}/VBox/import"}
+VBOX_DIR=${VBOX_DIR:='/srv'}
+VBOX_VM_DIR=${VBOX_VM_DIR:="${VBOX_DIR}/VBox/VMs"}
+VBOX_DRIVES_DIR=${VBOX_DRIVES_DIR:="${VBOX_DIR}/VBox/drives"}
+VBOX_IMPORT_DIR=${VBOX_IMPORT_DIR:="${VBOX_DIR}/VBox/import"}
 VBOX_AUTOSTART_DIR=${VBOX_AUTOSTART_DIR:="${VBOX_HOME}/VBoxAutostart"}
 VBOX_ETC_DEFAULT=${VBOX_ETC_DEFAULT:='/etc/default/virtualbox'}
 AUTOSTART_CONF=${AUTOSTART_CONF:='/etc/vbox/autostart.conf'}
@@ -147,6 +148,8 @@ if [ "${UNINSTALL_VBOX}" = true ]; then
 	deluser vbox || true
 	echo ">>>> Removing vbox group <<<<"
 	delgroup vbox || true
+	echo ">>>> Removing vboxusers group <<<<"
+	delgroup vboxusers || true
 
 	echo ">>>> Deleting '${VBOX_IMPORT_DIR}' (if empty) <<<<"
 	rmdir ${VBOX_IMPORT_DIR}
@@ -173,6 +176,15 @@ if [ "${UNINSTALL_VBOX}" = true ]; then
 
 	echo ">>>> Deleting '${VBOX_HOME}/bin/vbox_deactivate_auto.bash' <<<<"
 	rm ${VBOX_HOME}/bin/vbox_deactivate_auto.bash || true
+
+	echo ">>>> Deleting '${VBOX_HOME}/bin/vbox_activate_auto_shutdown.bash' <<<<"
+	rm ${VBOX_HOME}/bin/vbox_activate_auto_shutdown.bash || true
+
+	echo ">>>> Deleting '${VBOX_HOME}/bin/vbox_start_vms.bash' <<<<"
+	rm ${VBOX_HOME}/bin/vbox_start_vms.bash || true
+
+	echo ">>>> Deleting '${VBOX_HOME}/bin/vbox_shutdown_rvms.bash' <<<<"
+	rm ${VBOX_HOME}/bin/vbox_shutdown_rvms.bash || true
 
 	echo ">>>> Removing '${VBOX_HOME}/bin' <<<<"
 	rmdir ${VBOX_HOME}/bin || true

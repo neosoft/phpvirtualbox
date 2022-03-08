@@ -32,9 +32,10 @@ ACCEPT_ORACLE_EXTPACK_LICENSE=${ACCEPT_ORACLE_EXTPACK_LICENSE:='n'}
 VBOX_USER=${VBOX_USER:='vbox'}
 VBOX_GROUP=${VBOX_GROUP:='vboxusers'}
 VBOX_HOME=${VBOX_HOME:="/home/${VBOX_USER}"}
-VBOX_VM_DIR=${VBOX_VM_DIR:="${VBOX_HOME}/VBox/VMs"}
-VBOX_DRIVES_DIR=${VBOX_DRIVES_DIR:="${VBOX_HOME}/VBox/drives"}
-VBOX_IMPORT_DIR=${VBOX_IMPORT_DIR:="${VBOX_HOME}/VBox/import"}
+VBOX_DIR=${VBOX_DIR:='/srv'}
+VBOX_VM_DIR=${VBOX_VM_DIR:="${VBOX_DIR}/VBox/VMs"}
+VBOX_DRIVES_DIR=${VBOX_DRIVES_DIR:="${VBOX_DIR}/VBox/drives"}
+VBOX_IMPORT_DIR=${VBOX_IMPORT_DIR:="${VBOX_DIR}/VBox/import"}
 VBOX_AUTOSTART_DIR=${VBOX_AUTOSTART_DIR:="${VBOX_HOME}/VBoxAutostart"}
 VBOX_ETC_DEFAULT=${VBOX_ETC_DEFAULT:='/etc/default/virtualbox'}
 AUTOSTART_CONF=${AUTOSTART_CONF:='/etc/vbox/autostart.conf'}
@@ -183,7 +184,10 @@ EOT
 	fi
 
 	echo ">>>> Creating '${AUTOSTART_CONF}' <<<<"
-	echo -e "default_policy = deny\nvbox = {\n    allow = true\n}" | tee "$AUTOSTART_CONF" >/dev/null
+	echo -e '# Default policy is to deny starting a VM, the other option is "allow".' | tee "$AUTOSTART_CONF" >/dev/null
+	echo -e "default_policy = deny\n" | tee -a "$AUTOSTART_CONF" >/dev/null
+	echo -e '# user vbox is allowed to start virtual machines but starting them will be delayed for 10 seconds' | tee -a "$AUTOSTART_CONF" >/dev/null
+	echo -e "vbox = {\n  allow = true\n  startup_delay = 10\n}" | tee -a "$AUTOSTART_CONF" >/dev/null
 
 	echo ">>>> Creating '${VBOX_AUTOSTART_DIR}' <<<<"
 	su ${VBOX_USER} -c "mkdir -p \"${VBOX_AUTOSTART_DIR}\""
@@ -198,7 +202,24 @@ EOT
 	sed -i -e "/^\s*VBOXAUTOSTART_CONFIG\s*=.*$/d" "$VBOX_ETC_DEFAULT"
 
 	echo ">>>> Appending new autostart config to '${VBOX_ETC_DEFAULT}' <<<<"
-	echo -e "VBOXAUTOSTART_DB=${VBOX_AUTOSTART_DIR}\nVBOXAUTOSTART_CONFIG=/etc/vbox/autostart.conf" | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e "VBOXWEB_USER=vbox" | tee -a ${VBOX_ETC_DEFAULT} >/dev/null
+	echo -e "VBOXWEB_HOST=172.17.0.1" | tee -a ${VBOX_ETC_DEFAULT} >/dev/null
+	echo -e "VBOXWEB_LOGFILE=/var/log/vbox/web.log\n" | tee -a ${VBOX_ETC_DEFAULT} >/dev/null
+
+	echo -e "VBOXAUTOSTART_DB=${VBOX_AUTOSTART_DIR}" | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e "VBOXAUTOSTART_CONFIG=/etc/vbox/autostart.conf" | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e "VBOXAUTOSTART_LOGFILE=/var/log/vbox/autostart.log\n" | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+
+	echo -e '# SHUTDOWN_USERS="foo bar"' | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e "#   check for running VMs of user 'foo' and user 'bar'" | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e "#   'all' checks for all active users" | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e '# SHUTDOWN=poweroff' | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e '# SHUTDOWN=acpishutdown' | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e '# SHUTDOWN=savestate' | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e '#   select one of these shutdown methods for running VMs' | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e '#   acpishutdown and savestate causes the init script to wait 30 seconds for the VMs to shutdown\n' | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e "SHUTDOWN_USERS='${VBOX_USER}'  # space-delimited list of users who might have running vms" | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
+	echo -e 'SHUTDOWN=acpishutdown  # if any are found, shutdown them, other values: savestate, poweroff' | tee -a "$VBOX_ETC_DEFAULT" >/dev/null
 
 	echo ">>>> Restarting vbox services <<<<"
 	systemctl --no-pager status vboxdrv.service
@@ -388,6 +409,106 @@ EOF
 	echo "$vbox_deactivate_auto_bash_content" | su ${VBOX_USER} -c "tee \"${VBOX_HOME}/bin/vbox_deactivate_auto.bash\" >/dev/null"
 	echo ">>>> Making '${VBOX_HOME}/bin/vbox_deactivate_auto.bash' executable <<<<"
 	su ${VBOX_USER} -c "chmod +x \"${VBOX_HOME}/bin/vbox_deactivate_auto.bash\""
+
+	echo ">>>> Creating '${VBOX_HOME}/bin/vbox_activate_auto_shutdown.bash' <<<<"
+	set +e
+	read -r -d '' vbox_activate_auto_shutdown_bash_content <<'EOF'
+#!/usr/bin/env bash
+
+set -u
+set -e
+set -o pipefail
+
+rvms=$(vboxmanage list runningvms)
+vms=$(vboxmanage list vms)
+
+function activate_auto() {
+  if [ $( echo "$rvms" | grep "$1" | wc -l ) != 0 ]; then
+    echo "VM $1 is running, skipping"
+    continue
+  fi
+
+  if [ $( echo "$vms" | grep "$1" | wc -l ) == 0 ]; then
+    echo "Found no VM $1, skipping"
+    continue
+  fi
+
+  echo "Enabling autostart for VM $1 ..."
+  vboxmanage modifyvm "$1" --autostart-enabled on --autostart-delay 10
+  echo "Enabling autostop (savestate) for VM $1 ..."
+  vboxmanage modifyvm "$1" --autostop-type acpishutdown
+}
+
+if [[ $# -eq 0 ]]; then
+  echo "$vms" | cut -d'"' -f3 | cut -d" " -f2 | while read uid; do
+    activate_auto "$uid"
+  done
+else
+  while [ $# -gt 0 ]; do
+    activate_auto "$1"
+    shift
+  done
+fi
+EOF
+	read_exit_val=$?
+	set -e
+	if [ $read_exit_val != 1 ]; then
+	    exit $read_exit_val
+	fi
+
+	echo "vbox_activate_auto_shutdown_bash_content" | su ${VBOX_USER} -c "tee \"${VBOX_HOME}/bin/vbox_activate_auto_shutdown.bash\" >/dev/null"
+	echo ">>>> Making '${VBOX_HOME}/bin/vbox_activate_auto_shutdown.bash' executable <<<<"
+	su ${VBOX_USER} -c "chmod +x \"${VBOX_HOME}/bin/vbox_activate_auto_shutdown.bash\""
+
+	echo ">>>> Creating '${VBOX_HOME}/bin/vbox_start_vms.bash' <<<<"
+	set +e
+	read -r -d '' vbox_start_vms_bash_content <<'EOF'
+#!/usr/bin/env bash
+
+set -u
+set -e
+set -o pipefail
+
+vboxmanage list vms | cut -d'"' -f3 | cut -d" " -f2 | while read uid; do
+  echo "Starting VM $uid in headless mode..."
+  vboxmanage startvm "$uid" --type headless
+  echo "DONE"
+done
+EOF
+	read_exit_val=$?
+	set -e
+	if [ $read_exit_val != 1 ]; then
+	    exit $read_exit_val
+	fi
+
+	echo "$vbox_start_vms_bash_content" | su ${VBOX_USER} -c "tee \"${VBOX_HOME}/bin/vbox_start_vms.bash\" >/dev/null"
+	echo ">>>> Making '${VBOX_HOME}/bin/vbox_start_vms.bash' executable <<<<"
+	su ${VBOX_USER} -c "chmod +x \"${VBOX_HOME}/bin/vbox_start_vms.bash\""
+
+	echo ">>>> Creating '${VBOX_HOME}/bin/vbox_shutdown_rvms.bash' <<<<"
+	set +e
+	read -r -d '' vbox_shutdown_rvms_bash_content <<'EOF'
+#!/usr/bin/env bash
+
+set -u
+set -e
+set -o pipefail
+
+vboxmanage list runningvms | cut -d'"' -f3 | cut -d" " -f2 | while read uid; do
+  echo "Shutting down VM $uid ..."
+  vboxmanage controlvm "$uid" acpipowerbutton
+  echo "DONE"
+done
+EOF
+	read_exit_val=$?
+	set -e
+	if [ $read_exit_val != 1 ]; then
+	    exit $read_exit_val
+	fi
+
+	echo "$vbox_shutdown_rvms_bash_content" | su ${VBOX_USER} -c "tee \"${VBOX_HOME}/bin/vbox_shutdown_rvms.bash\" >/dev/null"
+	echo ">>>> Making '${VBOX_HOME}/bin/vbox_shutdown_rvms.bash' executable <<<<"
+	su ${VBOX_USER} -c "chmod +x \"${VBOX_HOME}/bin/vbox_shutdown_rvms.bash\""
 fi
 
 ###########################
